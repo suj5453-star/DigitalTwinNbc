@@ -1,4 +1,4 @@
-// Copyright NBC, Inc. All Rights Reserved.
+﻿// Copyright NBC, Inc. All Rights Reserved.
 
 #include "Sensor/LidarBevRenderer.h"
 #include "Engine/Texture2D.h"
@@ -60,18 +60,22 @@ void ULidarBevRenderer::RenderPointCloud(const FLidarPointCloudData& PointCloud,
 	const int32 PtSize = FMath::Max(Config.PointSize, 1);
 	const int32 PtHalf = PtSize / 2;
 
-	const FColor BgColor = Config.BackgroundColor.ToFColor(true);
 	FColor* RESTRICT Pixels = PixelBuffer.GetData();
+	if (!Pixels) return;
+
+	// 1) 배경 칠하기
+	const FColor BgColor = Config.BackgroundColor.ToFColor(true);
 	for (int32 i = 0; i < TotalPixels; ++i)
 	{
 		Pixels[i] = BgColor;
 	}
 
+	// 2) 그리드 먼저 그리기
+	DrawGrid(Pixels, ImgSize, Scale);
+
 	const FTransform InvSensor = SensorTransform.Inverse();
 	const int32 PointCount = PointCloud.PointCount;
 	const FVector* RESTRICT Points = PointCloud.Points.GetData();
-	const float* RESTRICT Intensities = PointCloud.Intensities.GetData();
-	const int32 IntensityCount = PointCloud.Intensities.Num();
 
 	for (int32 i = 0; i < PointCount; ++i)
 	{
@@ -85,11 +89,21 @@ void ULidarBevRenderer::RenderPointCloud(const FLidarPointCloudData& PointCloud,
 			continue;
 		}
 
-		const float Intensity = (i < IntensityCount) ? Intensities[i] : 0.5f;
+		// 3) 높이(Z) 기반 컬러맵
+		const float MinZ = -200.0f;
+		const float MaxZ = 300.0f;
+
+		const float ZAlpha = FMath::GetMappedRangeValueClamped(
+			FVector2D(MinZ, MaxZ),
+			FVector2D(0.0f, 1.0f),
+			LocalPt.Z
+		);
+
 		const FColor Color = ColorLUT[
-			static_cast<uint8>(FMath::Clamp(Intensity * 255.f, 0.f, 255.f))
+			static_cast<uint8>(FMath::Clamp(ZAlpha * 255.f, 0.f, 255.f))
 		];
 
+		// 4) 포인트 찍기
 		if (PtSize == 1)
 		{
 			Pixels[CY * ImgSize + CX] = Color;
@@ -107,21 +121,87 @@ void ULidarBevRenderer::RenderPointCloud(const FLidarPointCloudData& PointCloud,
 		}
 	}
 
-	const int32 C = FMath::RoundToInt32(HalfSize);
-	const FColor White(255, 255, 255, 255);
-	for (int32 dy = -3; dy < 3; ++dy)
-	{
-		const int32 Row = (C + dy) * ImgSize;
-		for (int32 dx = -3; dx < 3; ++dx)
-		{
-			Pixels[Row + C + dx] = White;
-		}
-	}
+	// 5) 차량 방향 화살표는 맨 마지막
+	DrawVehicleArrow(Pixels, ImgSize);
 
+	// 6) 텍스처 갱신
 	DynamicTexture->UpdateTextureRegions(
 		0, 1, &UpdateRegion,
 		ImgSize * sizeof(FColor),
 		sizeof(FColor),
 		reinterpret_cast<uint8*>(Pixels)
 	);
+}
+
+void ULidarBevRenderer::DrawGrid(FColor* Pixels, int32 ImgSize, float Scale)
+{
+	const FColor GridColor(60, 60, 60, 255);
+
+	// Unreal 단위: 100cm = 1m
+	// 10m = 1000cm
+	const float GridWorldStep = 1000.0f;
+	const int32 GridPixelStep = FMath::RoundToInt32(GridWorldStep * Scale);
+
+	if (GridPixelStep <= 0)
+	{
+		return;
+	}
+
+	const int32 Center = ImgSize / 2;
+
+	for (int32 Offset = 0; Offset < ImgSize / 2; Offset += GridPixelStep)
+	{
+		const int32 X1 = Center + Offset;
+		const int32 X2 = Center - Offset;
+		const int32 Y1 = Center + Offset;
+		const int32 Y2 = Center - Offset;
+
+		for (int32 i = 0; i < ImgSize; ++i)
+		{
+			if (X1 >= 0 && X1 < ImgSize) Pixels[i * ImgSize + X1] = GridColor;
+			if (X2 >= 0 && X2 < ImgSize) Pixels[i * ImgSize + X2] = GridColor;
+			if (Y1 >= 0 && Y1 < ImgSize) Pixels[Y1 * ImgSize + i] = GridColor;
+			if (Y2 >= 0 && Y2 < ImgSize) Pixels[Y2 * ImgSize + i] = GridColor;
+		}
+	}
+}
+
+void ULidarBevRenderer::DrawVehicleArrow(FColor* Pixels, int32 ImgSize)
+{
+	const int32 C = ImgSize / 2;
+	const FColor ArrowColor(255, 255, 255, 255);
+
+
+	for (int32 y = -18; y <= 8; ++y)
+	{
+		const int32 Width = y < -8 ? 1 : 4;
+
+		for (int32 x = -Width; x <= Width; ++x)
+		{
+			const int32 PX = C + x;
+			const int32 PY = C + y;
+
+			if (PX >= 0 && PX < ImgSize && PY >= 0 && PY < ImgSize)
+			{
+				Pixels[PY * ImgSize + PX] = ArrowColor;
+			}
+		}
+	}
+
+	// 화살표 머리
+	for (int32 y = -24; y <= -16; ++y)
+	{
+		const int32 Width = FMath::Abs(y + 24);
+
+		for (int32 x = -Width; x <= Width; ++x)
+		{
+			const int32 PX = C + x;
+			const int32 PY = C + y;
+
+			if (PX >= 0 && PX < ImgSize && PY >= 0 && PY < ImgSize)
+			{
+				Pixels[PY * ImgSize + PX] = ArrowColor;
+			}
+		}
+	}
 }
