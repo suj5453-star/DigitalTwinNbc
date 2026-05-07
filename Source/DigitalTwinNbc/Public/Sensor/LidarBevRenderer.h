@@ -16,14 +16,31 @@ class DIGITALTWINNBC_API ULidarBevRenderer : public UObject
 
 public:
 	void Initialize(const FBevRenderConfig& InConfig);
-	void RenderPointCloud(const FLidarPointCloudData& PointCloud, const FTransform& SensorTransform);
+
+	void RenderPointCloud(
+		const FLidarPointCloudData& PointCloud,
+		const FTransform& SensorTransform
+	);
+
 	UTexture2D* GetRenderTarget() const { return DynamicTexture; }
+
 	void UpdateConfig(const FBevRenderConfig& InConfig);
 
 private:
 	void CreateTexture();
 	void BuildColorLUT();
-	void DrawPoint(int32 CenterX, int32 CenterY, const FColor& Color, int32 PointSize);
+
+	void DrawPoint(
+		int32 CenterX,
+		int32 CenterY,
+		const FColor& Color,
+		int32 PointSize
+	);
+
+	void DrawGrid();
+	void DrawVehicleArrow();
+
+	FColor GetHeightColor(float LocalZ) const;
 
 private:
 	UPROPERTY()
@@ -31,6 +48,7 @@ private:
 
 	TArray<FColor> PixelBuffer;
 	FUpdateTextureRegion2D UpdateRegion;
+
 	FBevRenderConfig Config;
 	FColor ColorLUT[256];
 };
