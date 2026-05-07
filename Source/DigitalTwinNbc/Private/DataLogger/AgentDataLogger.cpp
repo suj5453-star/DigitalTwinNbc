@@ -4,6 +4,7 @@
 #include "HAL/PlatformFileManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Sensor/SensorExperimentComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Kismet/GameplayStatics.h"
 
@@ -16,6 +17,13 @@ UAgentDataLogger::UAgentDataLogger()
 void UAgentDataLogger::BeginPlay()
 {
 	Super::BeginPlay();
+	
+	// SensorExperimentComponent는 별도 CSV를 만들지 않고,
+	// AgentDataLogger가 하나의 CSV에 값을 합칠 수 있도록 컬럼/값 문자열만 제공합니다.
+	if (AActor* Owner = GetOwner())
+	{
+		SensorExperimentComponent = Owner->FindComponentByClass<USensorExperimentComponent>();
+	}
 
 	OriginUtmZone = GetUtmZone(OriginLongitude);
 	LatLonToUtm(OriginLatitude, OriginLongitude, OriginUtmZone, OriginUtmEasting, OriginUtmNorthing);
@@ -88,8 +96,14 @@ void UAgentDataLogger::CreateCsvFile()
 
 	CsvFilePath = FPaths::Combine(OutputDir, FileName);
 
-	const FString Header =
-		TEXT("Timestamp,World_X,World_Y,World_Z,UTM_Easting,UTM_Northing,UTM_Zone,Velocity_kmh,Yaw,Accel_ms2,SteeringInput\n");
+	FString Header =
+		TEXT("Timestamp,World_X,World_Y,World_Z,UTM_Easting,UTM_Northing,UTM_Zone,Velocity_kmh,Yaw,Accel_ms2,SteeringInput");
+  	// SensorExperimentComponent가 있으면 센서 실험 관련 컬럼을 뒤에 붙임
+	if (SensorExperimentComponent)
+	{
+		Header += SensorExperimentComponent->BuildCsvHeaderColumns();
+	}
+	Header += LINE_TERMINATOR;
 	FFileHelper::SaveStringToFile(Header, *CsvFilePath,
 		FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM
 	);
@@ -119,8 +133,8 @@ void UAgentDataLogger::AppendRow()
 	double UtmNorthing = 0.0;
 	WorldToUtm(WorldLoc, UtmEasting, UtmNorthing);
 
-	const FString Row = FString::Printf(
-		TEXT("%.3f,%.2f,%.2f,%.2f,%.4f,%.4f,%d,%.2f,%.4f,%.4f,%.4f\n"),
+	FString Row = FString::Printf(
+		TEXT("%.3f,%.2f,%.2f,%.2f,%.4f,%.4f,%d,%.2f,%.4f,%.4f,%.4f"),
 		ElapsedRecordingTime,
 		WorldLoc.X, WorldLoc.Y, WorldLoc.Z,
 		UtmEasting, UtmNorthing, OriginUtmZone,
@@ -129,6 +143,13 @@ void UAgentDataLogger::AppendRow()
 		AccelMs2,
 		CurrentSteeringInput
 	);
+	
+	// 센서 현재 실험 프리셋/센서 평가값만 CSV 컬럼 문자열로 제공
+	if (SensorExperimentComponent)
+	{
+		Row += SensorExperimentComponent->BuildCsvRowColumns();
+	}
+	Row += LINE_TERMINATOR;
 
 	FFileHelper::SaveStringToFile(Row, *CsvFilePath,
 		FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM,

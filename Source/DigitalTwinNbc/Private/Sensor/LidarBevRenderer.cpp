@@ -27,19 +27,16 @@ void ULidarBevRenderer::BuildColorLUT()
 {
 	const FLinearColor DarkGreen(0.0f, 0.3f, 0.0f, 1.0f);
 	const FLinearColor Bright = Config.PointColor;
+
 	for (int32 i = 0; i < 256; ++i)
 	{
-		ColorLUT[i] = FMath::Lerp(
-			DarkGreen,
-			Bright,
-			static_cast<float>(i) / 255.f
-		).ToFColor(true);
+		ColorLUT[i] = FMath::Lerp(DarkGreen, Bright, static_cast<float>(i) / 255.0f).ToFColor(true);
 	}
 }
 
 void ULidarBevRenderer::UpdateConfig(const FBevRenderConfig& InConfig)
 {
-	const bool bSizeChanged = (Config.ImageSize != InConfig.ImageSize);
+	const bool bSizeChanged = Config.ImageSize != InConfig.ImageSize;
 	Config = InConfig;
 	BuildColorLUT();
 
@@ -49,19 +46,52 @@ void ULidarBevRenderer::UpdateConfig(const FBevRenderConfig& InConfig)
 	}
 }
 
+void ULidarBevRenderer::DrawPoint(int32 CenterX, int32 CenterY, const FColor& Color, int32 PointSize)
+{
+	const int32 ImgSize = Config.ImageSize;
+	const int32 PtSize = FMath::Max(PointSize, 1);
+	const int32 PtHalf = PtSize / 2;
+
+	if (CenterX < PtHalf || CenterX >= ImgSize - PtHalf || CenterY < PtHalf || CenterY >= ImgSize - PtHalf)
+	{
+		return;
+	}
+
+	FColor* RESTRICT Pixels = PixelBuffer.GetData();
+
+	if (PtSize == 1)
+	{
+		Pixels[CenterY * ImgSize + CenterX] = Color;
+		return;
+	}
+
+	for (int32 dy = -PtHalf; dy < PtSize - PtHalf; ++dy)
+	{
+		const int32 Row = (CenterY + dy) * ImgSize;
+		for (int32 dx = -PtHalf; dx < PtSize - PtHalf; ++dx)
+		{
+			Pixels[Row + CenterX + dx] = Color;
+		}
+	}
+}
+
 void ULidarBevRenderer::RenderPointCloud(const FLidarPointCloudData& PointCloud, const FTransform& SensorTransform)
 {
-	if (!DynamicTexture) return;
+	if (!DynamicTexture)
+	{
+		return;
+	}
 
 	const int32 ImgSize = Config.ImageSize;
 	const int32 TotalPixels = ImgSize * ImgSize;
 	const float HalfSize = static_cast<float>(ImgSize) * 0.5f;
 	const float Scale = HalfSize / Config.ViewRange;
-	const int32 PtSize = FMath::Max(Config.PointSize, 1);
-	const int32 PtHalf = PtSize / 2;
+	const int32 NormalPointSize = FMath::Max(FMath::RoundToInt32(Config.PointSize), 1);
+	const int32 ObstaclePointSize = NormalPointSize + 1;
 
 	const FColor BgColor = Config.BackgroundColor.ToFColor(true);
 	FColor* RESTRICT Pixels = PixelBuffer.GetData();
+
 	for (int32 i = 0; i < TotalPixels; ++i)
 	{
 		Pixels[i] = BgColor;
@@ -80,46 +110,26 @@ void ULidarBevRenderer::RenderPointCloud(const FLidarPointCloudData& PointCloud,
 		const int32 CX = FMath::RoundToInt32(HalfSize + LocalPt.Y * Scale);
 		const int32 CY = FMath::RoundToInt32(HalfSize - LocalPt.X * Scale);
 
-		if (CX < PtHalf || CX >= ImgSize - PtHalf || CY < PtHalf || CY >= ImgSize - PtHalf)
-		{
-			continue;
-		}
-
 		const float Intensity = (i < IntensityCount) ? Intensities[i] : 0.5f;
-		const FColor Color = ColorLUT[
-			static_cast<uint8>(FMath::Clamp(Intensity * 255.f, 0.f, 255.f))
-		];
+		const bool bObstacle = Config.bDrawObstacles
+			&& PointCloud.ObstacleFlags.IsValidIndex(i)
+			&& PointCloud.ObstacleFlags[i] != 0;
 
-		if (PtSize == 1)
-		{
-			Pixels[CY * ImgSize + CX] = Color;
-		}
-		else
-		{
-			for (int32 dy = -PtHalf; dy < PtSize - PtHalf; ++dy)
-			{
-				const int32 Row = (CY + dy) * ImgSize;
-				for (int32 dx = -PtHalf; dx < PtSize - PtHalf; ++dx)
-				{
-					Pixels[Row + CX + dx] = Color;
-				}
-			}
-		}
+		const FColor Color = bObstacle
+			? Config.ObstacleColor.ToFColor(true)
+			: ColorLUT[static_cast<uint8>(FMath::Clamp(Intensity * 255.0f, 0.0f, 255.0f))];
+
+		DrawPoint(CX, CY, Color, bObstacle ? ObstaclePointSize : NormalPointSize);
 	}
 
-	const int32 C = FMath::RoundToInt32(HalfSize);
+	const int32 Center = FMath::RoundToInt32(HalfSize);
 	const FColor White(255, 255, 255, 255);
-	for (int32 dy = -3; dy < 3; ++dy)
-	{
-		const int32 Row = (C + dy) * ImgSize;
-		for (int32 dx = -3; dx < 3; ++dx)
-		{
-			Pixels[Row + C + dx] = White;
-		}
-	}
+	DrawPoint(Center, Center, White, 6);
 
 	DynamicTexture->UpdateTextureRegions(
-		0, 1, &UpdateRegion,
+		0,
+		1,
+		&UpdateRegion,
 		ImgSize * sizeof(FColor),
 		sizeof(FColor),
 		reinterpret_cast<uint8*>(Pixels)

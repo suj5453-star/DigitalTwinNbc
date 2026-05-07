@@ -35,10 +35,9 @@ void UCameraSensorComponent::OnRegister()
 void UCameraSensorComponent::BeginPlay()
 {
 	Super::BeginPlay();
-	InitializeCapture();
 	ApplyPreset(Preset);
+	InitializeCapture();
 }
-
 void UCameraSensorComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	StopCaptureTimer();
@@ -161,26 +160,27 @@ void UCameraSensorComponent::ApplyPostProcessSettings()
 
 void UCameraSensorComponent::ApplyLensDistortion()
 {
-	if (SceneCapture == nullptr)
+	if (!SceneCapture)
 	{
-		UE_LOG(LogCameraSensor, Error, TEXT("There is no SceneCaptureComponent"));
+		UE_LOG(LogCameraSensor, Warning, TEXT("SceneCaptureComponent is not ready."));
 		return;
 	}
-	if (Distortion.HasDistortion() == false)
+
+	if (!Distortion.HasDistortion())
 	{
-		UE_LOG(LogCameraSensor, Error, TEXT("There is no Distortion"));
 		return;
 	}
-	if (LensDistortionMaterial == nullptr)
+
+	if (!LensDistortionMaterial)
 	{
-		UE_LOG(LogCameraSensor, Error, TEXT("There is no LensDistortionMaterial"));
+		UE_LOG(LogCameraSensor, Verbose, TEXT("LensDistortionMaterial is not assigned. Distortion skipped."));
 		return;
 	}
 
 	DistortionMID = UMaterialInstanceDynamic::Create(LensDistortionMaterial, this);
-	if (DistortionMID == nullptr)
+	if (!DistortionMID)
 	{
-		UE_LOG(LogCameraSensor, Error, TEXT("Failed to create DistortionMID."));
+		UE_LOG(LogCameraSensor, Warning, TEXT("Failed to create DistortionMID."));
 		return;
 	}
 
@@ -193,6 +193,7 @@ void UCameraSensorComponent::ApplyLensDistortion()
 	FWeightedBlendable Blendable;
 	Blendable.Object = DistortionMID.Get();
 	Blendable.Weight = 1.0f;
+
 	SceneCapture->PostProcessSettings.WeightedBlendables.Array.Add(Blendable);
 }
 
@@ -218,6 +219,8 @@ void UCameraSensorComponent::OnCaptureTimer()
 {
 	if (bSensorEnabled && SceneCapture)
 	{
+		LastCaptureTimestamp = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+
 		SceneCapture->CaptureScene();
 		FrameCount++;
 
@@ -242,6 +245,8 @@ void UCameraSensorComponent::CaptureOnce()
 {
 	if (SceneCapture)
 	{
+		LastCaptureTimestamp = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+
 		SceneCapture->CaptureScene();
 		FrameCount++;
 	}
@@ -405,4 +410,10 @@ void UCameraSensorComponent::SaveCameraImage()
 
 	UE_LOG(LogCameraSensor, Verbose, TEXT("Saved %dx%d image → %s (%lld bytes)"),
 		Width, Height, *FilePath, CompressedData.Num());
+}
+
+void UCameraSensorComponent::SetDistortionParams(const FLensDistortionParams& InDistortion)
+{
+	Distortion = InDistortion;
+	RefreshSettings();
 }

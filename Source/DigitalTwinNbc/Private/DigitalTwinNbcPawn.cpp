@@ -218,7 +218,7 @@ void ADigitalTwinNbcPawn::DoToggleSensorView()
 	if (PC == nullptr)
 		return;
 	
-	UTextureRenderTarget2D* CamRT = CameraSensor ? CameraSensor->GetRednerTarget() : nullptr;
+	UTextureRenderTarget2D* CamRT = CameraSensor ? CameraSensor->GetRenderTarget() : nullptr;
 	PC->ToggleSensorView(CamRT);
 }
 

@@ -6,6 +6,8 @@
 #include "Components/ActorComponent.h"
 #include "AgentDataLogger.generated.h"
 
+class USensorExperimentComponent;
+
 UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
 class DIGITALTWINNBC_API UAgentDataLogger : public UActorComponent
 {
@@ -59,7 +61,9 @@ private:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Data Logger|UTM Reference",
 		meta=(ClampMin="-180.0", ClampMax="180.0", Units="deg", AllowPrivateAccess="true"))
 	double OriginLongitude = 127.0000;
-
+	
+	UPROPERTY()
+	TObjectPtr<USensorExperimentComponent> SensorExperimentComponent;
 private:
 	// 시각화 설정
 	// 궤적 선 두께 

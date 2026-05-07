@@ -47,6 +47,9 @@ struct FLidarSensorConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LidarConfig", meta = (ClampMin = "0.0", ClampMax = "50.0"))
 	float NoiseStdDev = 2.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LidarConfig")
+	TArray<float> ElevationAngles;
+
 	int32 GetTotalPoints() const { return NumChannels * PointsPerChannel; }
 };
 
@@ -62,16 +65,25 @@ struct FLidarPointCloudData
 	TArray<float> Intensities;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "PointCloud")
+	TArray<uint8> ObstacleFlags;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "PointCloud")
 	int32 PointCount = 0;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "PointCloud")
 	int64 FrameNumber = 0;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "PointCloud")
+	double Timestamp = 0.0;
+
 	void Reset()
 	{
 		Points.Reset();
 		Intensities.Reset();
+		ObstacleFlags.Reset();
 		PointCount = 0;
+		FrameNumber = 0;
+		Timestamp = 0.0;
 	}
 };
 
@@ -94,6 +106,12 @@ struct FBevRenderConfig
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "BEV", meta = (ClampMin = "1.0", ClampMax = "8.0"))
 	float PointSize = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "BEV")
+	bool bDrawObstacles = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "BEV")
+	FLinearColor ObstacleColor = FLinearColor(1.0f, 0.1f, 0.05f, 1.0f);
 };
 
 UENUM(BlueprintType)
