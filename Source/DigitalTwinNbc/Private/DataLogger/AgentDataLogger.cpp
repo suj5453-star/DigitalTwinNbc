@@ -97,7 +97,7 @@ void UAgentDataLogger::CreateCsvFile()
 	CsvFilePath = FPaths::Combine(OutputDir, FileName);
 
 	FString Header =
-		TEXT("Timestamp,World_X,World_Y,World_Z,UTM_Easting,UTM_Northing,UTM_Zone,Velocity_kmh,Yaw,Accel_ms2,SteeringInput\n");
+		TEXT("Timestamp,World_X,World_Y,World_Z,UTM_Easting,UTM_Northing,UTM_Zone,Velocity_kmh,Yaw,Accel_ms2,SteeringInput");
   	// SensorExperimentComponent가 있으면 센서 실험 관련 컬럼을 뒤에 붙임
 	if (SensorExperimentComponent)
 	{
