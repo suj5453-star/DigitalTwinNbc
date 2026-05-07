@@ -47,7 +47,10 @@ void ULidarSensorComponent::PostEditChangeProperty(FPropertyChangedEvent& Proper
 
 	const FName PropName = PropertyChangedEvent.GetPropertyName();
 	if (PropName == GET_MEMBER_NAME_CHECKED(ULidarSensorComponent, Preset))
+	{
 		ApplyPreset(Preset);
+	}
+
 	bDirectionsDirty = true;
 }
 #endif
@@ -57,45 +60,91 @@ void ULidarSensorComponent::InitializeSensor()
 	BevConfig.ViewRange = Config.MaxRange;
 
 	BevRenderer = NewObject<ULidarBevRenderer>(this, TEXT("BevRenderer"));
-	BevRenderer->Initialize(BevConfig);
+	if (BevRenderer)
+	{
+		BevRenderer->Initialize(BevConfig);
+	}
 
-	const int32 TotalPts = Config.GetTotalPoints();
-	PendingHandles.Reserve(TotalPts);
-	PendingWorldDirs.Reserve(TotalPts);
-	ScanPoints.Reserve(TotalPts);
-	ScanIntensities.Reserve(TotalPts);
-	LastPointCloud.Points.Reserve(TotalPts);
-	LastPointCloud.Intensities.Reserve(TotalPts);
+	ReserveBuffers(FMath::Min(Config.GetTotalPoints(), MaxTracesPerScan));
 
 	bDirectionsDirty = true;
-	bSensorEnabled = false;
+	NextRayIndex = 0;
+
+	if (bSensorEnabled)
+	{
+		StartScanTimer();
+	}
 
 	UE_LOG(LogLidarSensor, Log,
-		TEXT("LidarSensor initialized: %d ch x %d pts @ %.0f Hz, range %.0f m  [AsyncTrace]"),
-		Config.NumChannels, Config.PointsPerChannel,
-		Config.RotationRate, Config.MaxRange / 100.0f
+		TEXT("LidarSensor initialized: %d ch x %d pts @ %.0f Hz, range %.0f m, max traces per scan %d"),
+		Config.NumChannels,
+		Config.PointsPerChannel,
+		Config.RotationRate,
+		Config.MaxRange / 100.0f,
+		MaxTracesPerScan
 	);
+}
+
+void ULidarSensorComponent::ReserveBuffers(int32 InReserveCount)
+{
+	const int32 ReserveCount = FMath::Max(InReserveCount, 1);
+
+	PendingHandles.Reserve(ReserveCount);
+	PendingWorldDirs.Reserve(ReserveCount);
+
+	ScanPoints.Reserve(ReserveCount);
+	ScanIntensities.Reserve(ReserveCount);
+	ScanObstacleFlags.Reserve(ReserveCount);
+
+	LastPointCloud.Points.Reserve(ReserveCount);
+	LastPointCloud.Intensities.Reserve(ReserveCount);
+	LastPointCloud.ObstacleFlags.Reserve(ReserveCount);
+}
+
+void ULidarSensorComponent::ApplyDefaultElevationAngles()
+{
+	Config.ElevationAngles.Reset();
+
+	const int32 NumCh = FMath::Max(Config.NumChannels, 1);
+	const float VertLow = Config.VerticalFOVLower;
+	const float VertRng = Config.VerticalFOVUpper - VertLow;
+
+	for (int32 Ch = 0; Ch < NumCh; ++Ch)
+	{
+		const float Alpha = (NumCh > 1) ? static_cast<float>(Ch) / static_cast<float>(NumCh - 1) : 0.5f;
+		Config.ElevationAngles.Add(VertLow + VertRng * Alpha);
+	}
 }
 
 void ULidarSensorComponent::RebuildDirectionCache()
 {
-	const int32 NumCh    = Config.NumChannels;
-	const int32 NumPts   = Config.PointsPerChannel;
-	const float VertLow  = Config.VerticalFOVLower;
-	const float VertRng  = Config.VerticalFOVUpper - VertLow;
+	const int32 NumCh = Config.NumChannels;
+	const int32 NumPts = Config.PointsPerChannel;
 	const float HorizFOV = Config.HorizontalFOV;
 
 	CachedLocalDirections.SetNum(NumCh * NumPts, EAllowShrinking::No);
 
 	for (int32 Ch = 0; Ch < NumCh; ++Ch)
 	{
-		const float VertDeg  = (NumCh > 1) ? VertLow + VertRng * (float(Ch) / (NumCh - 1)) : 0.f;
-		const float CosVert  = FMath::Cos(FMath::DegreesToRadians(VertDeg));
-		const float SinVert  = FMath::Sin(FMath::DegreesToRadians(VertDeg));
+		float VertDeg = 0.0f;
+
+		if (Config.ElevationAngles.IsValidIndex(Ch))
+		{
+			VertDeg = Config.ElevationAngles[Ch];
+		}
+		else
+		{
+			const float VertLow = Config.VerticalFOVLower;
+			const float VertRng = Config.VerticalFOVUpper - VertLow;
+			VertDeg = (NumCh > 1) ? VertLow + VertRng * (static_cast<float>(Ch) / static_cast<float>(NumCh - 1)) : 0.0f;
+		}
+
+		const float CosVert = FMath::Cos(FMath::DegreesToRadians(VertDeg));
+		const float SinVert = FMath::Sin(FMath::DegreesToRadians(VertDeg));
 
 		for (int32 Pt = 0; Pt < NumPts; ++Pt)
 		{
-			const float HorizRad = FMath::DegreesToRadians((float(Pt) / NumPts) * HorizFOV);
+			const float HorizRad = FMath::DegreesToRadians((static_cast<float>(Pt) / static_cast<float>(NumPts)) * HorizFOV);
 			CachedLocalDirections[Ch * NumPts + Pt] = FVector(
 				CosVert * FMath::Cos(HorizRad),
 				CosVert * FMath::Sin(HorizRad),
@@ -109,22 +158,28 @@ void ULidarSensorComponent::RebuildDirectionCache()
 
 void ULidarSensorComponent::StartScanTimer()
 {
-	if (GetWorld() == nullptr) return;
-	
+	if (GetWorld() == nullptr)
+	{
+		return;
+	}
+
 	const float Interval = 1.0f / FMath::Max(Config.RotationRate, 1.0f);
 	GetWorld()->GetTimerManager().SetTimer(
 		ScanTimerHandle,
 		this,
 		&ULidarSensorComponent::OnScanTimer,
 		Interval,
-		true);
+		true
+	);
 }
 
 void ULidarSensorComponent::StopScanTimer()
 {
 	if (GetWorld())
+	{
 		GetWorld()->GetTimerManager().ClearTimer(ScanTimerHandle);
-	
+	}
+
 	bHasPendingTraces = false;
 	SetComponentTickEnabled(false);
 }
@@ -132,13 +187,16 @@ void ULidarSensorComponent::StopScanTimer()
 void ULidarSensorComponent::OnScanTimer()
 {
 	if (!bSensorEnabled)
+	{
 		return;
+	}
 
 	if (bDirectionsDirty)
+	{
 		RebuildDirectionCache();
+	}
 
 	FireAsyncTraces();
-
 	++FrameCount;
 }
 
@@ -146,30 +204,45 @@ void ULidarSensorComponent::FireAsyncTraces()
 {
 	UWorld* World = GetWorld();
 	if (!World || CachedLocalDirections.IsEmpty())
+	{
 		return;
+	}
+
+	if (bHasPendingTraces)
+	{
+		return;
+	}
 
 	PendingHandles.Reset();
 	PendingWorldDirs.Reset();
 
 	const FTransform SensorTransform = GetComponentTransform();
-	const FVector    SensorLoc       = SensorTransform.GetLocation();
-	const FQuat      SensorQuat      = SensorTransform.GetRotation();
+	const FVector SensorLoc = SensorTransform.GetLocation();
+	const FQuat SensorQuat = SensorTransform.GetRotation();
+
 	PendingTransform = SensorTransform;
+	LastScanTimestamp = World->GetTimeSeconds();
 
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(LidarAsyncTrace), false);
 	Params.AddIgnoredActor(GetOwner());
 	Params.bReturnPhysicalMaterial = false;
 
+	const int32 TotalRays = CachedLocalDirections.Num();
+	const int32 TraceCount = FMath::Clamp(MaxTracesPerScan, 1, TotalRays);
 	const float MaxRange = Config.MaxRange;
 
-	for (const FVector& LocalDir : CachedLocalDirections)
+	for (int32 Step = 0; Step < TraceCount; ++Step)
 	{
-		const FVector WorldDir = SensorQuat.RotateVector(LocalDir);
-		const FVector End      = SensorLoc + WorldDir * MaxRange;
+		const int32 RayIndex = (NextRayIndex + Step) % TotalRays;
+		const FVector& LocalDir = CachedLocalDirections[RayIndex];
 
-		FTraceHandle Handle = World->AsyncLineTraceByChannel(
+		const FVector WorldDir = SensorQuat.RotateVector(LocalDir);
+		const FVector End = SensorLoc + WorldDir * MaxRange;
+
+		const FTraceHandle Handle = World->AsyncLineTraceByChannel(
 			EAsyncTraceType::Single,
-			SensorLoc, End,
+			SensorLoc,
+			End,
 			ECC_Visibility,
 			Params
 		);
@@ -178,61 +251,90 @@ void ULidarSensorComponent::FireAsyncTraces()
 		PendingWorldDirs.Add(WorldDir);
 	}
 
-	FireFrameNumber   = GFrameCounter;
-	bHasPendingTraces = true;
+	NextRayIndex = (NextRayIndex + TraceCount) % TotalRays;
 
+	FireFrameNumber = GFrameCounter;
+	bHasPendingTraces = true;
 	SetComponentTickEnabled(true);
 }
 
 void ULidarSensorComponent::CollectAsyncResults()
 {
 	UWorld* World = GetWorld();
-	if (!World) return;
+	if (!World)
+	{
+		bHasPendingTraces = false;
+		return;
+	}
 
 	ScanPoints.Reset();
 	ScanIntensities.Reset();
+	ScanObstacleFlags.Reset();
 
-	const float MaxRange = Config.MaxRange;
-	const float MinRange = Config.MinRange;
-	const float NoiseStd = Config.NoiseStdDev;
+	const float MaxRange = FMath::Max(Config.MaxRange, 1.0f);
+	const float MinRange = FMath::Max(Config.MinRange, 0.0f);
+	const float NoiseStd = FMath::Max(Config.NoiseStdDev, 0.0f);
 
 	for (int32 i = 0; i < PendingHandles.Num(); ++i)
 	{
 		FTraceDatum Data;
-		if (!World->QueryTraceData(PendingHandles[i], Data)) continue;
-		if (Data.OutHits.IsEmpty()) continue;
-
-		const FHitResult& Hit = Data.OutHits[0];
-		if (!Hit.bBlockingHit || Hit.Distance < MinRange) continue;
-
-		FVector HitPoint = Hit.ImpactPoint;
-		if (NoiseStd > 0.f && PendingWorldDirs.IsValidIndex(i))
+		if (!World->QueryTraceData(PendingHandles[i], Data))
 		{
-			HitPoint += PendingWorldDirs[i] * FMath::RandRange(-NoiseStd, NoiseStd);
+			continue;
 		}
 
+		if (Data.OutHits.IsEmpty())
+		{
+			continue;
+		}
+
+		const FHitResult& Hit = Data.OutHits[0];
+		if (!Hit.bBlockingHit || Hit.Distance < MinRange)
+		{
+			continue;
+		}
+
+		FVector HitPoint = Hit.ImpactPoint;
+
+		if (NoiseStd > 0.0f && PendingWorldDirs.IsValidIndex(i))
+		{
+			HitPoint += PendingWorldDirs[i] * FMath::FRandRange(-NoiseStd, NoiseStd);
+		}
+
+		const bool bObstacle = Hit.Distance <= ObstacleDistanceThreshold;
+
 		ScanPoints.Add(HitPoint);
-		ScanIntensities.Add(FMath::Clamp(1.f - (Hit.Distance / MaxRange), 0.f, 1.f));
+		ScanIntensities.Add(FMath::Clamp(1.0f - Hit.Distance / MaxRange, 0.0f, 1.0f));
+		ScanObstacleFlags.Add(bObstacle ? 1 : 0);
 	}
 
-	LastPointCloud.Points      = MoveTemp(ScanPoints);
+	LastPointCloud.Points = MoveTemp(ScanPoints);
 	LastPointCloud.Intensities = MoveTemp(ScanIntensities);
-	LastPointCloud.PointCount  = LastPointCloud.Points.Num();
+	LastPointCloud.ObstacleFlags = MoveTemp(ScanObstacleFlags);
+	LastPointCloud.PointCount = LastPointCloud.Points.Num();
 	LastPointCloud.FrameNumber = FrameCount;
+	LastPointCloud.Timestamp = LastScanTimestamp;
 
-	ScanPoints.Reserve(Config.GetTotalPoints());
-	ScanIntensities.Reserve(Config.GetTotalPoints());
+	ReserveBuffers(FMath::Min(Config.GetTotalPoints(), MaxTracesPerScan));
 
 	if (BevRenderer)
+	{
 		BevRenderer->RenderPointCloud(LastPointCloud, PendingTransform);
+	}
 
 	if (bIsDataSaving && LastPointCloud.PointCount > 0)
+	{
 		SavePointCloudData();
+	}
 
 	bHasPendingTraces = false;
 
 	UE_LOG(LogLidarSensor, Verbose,
-		TEXT("LidarSensor frame %lld: %d points"), FrameCount, LastPointCloud.PointCount);
+		TEXT("LidarSensor frame %lld: %d points, timestamp %.3f"),
+		FrameCount,
+		LastPointCloud.PointCount,
+		LastPointCloud.Timestamp
+	);
 }
 
 void ULidarSensorComponent::StartScan()
@@ -251,22 +353,33 @@ void ULidarSensorComponent::SetScanRate(float Hz)
 {
 	Config.RotationRate = FMath::Clamp(Hz, 1.0f, 30.0f);
 	StopScanTimer();
+
 	if (bSensorEnabled)
+	{
 		StartScanTimer();
+	}
 }
 
 void ULidarSensorComponent::RefreshSettings()
 {
 	bDirectionsDirty = true;
+	NextRayIndex = 0;
+
 	BevConfig.ViewRange = Config.MaxRange;
-	
+
 	if (BevRenderer)
+	{
 		BevRenderer->UpdateConfig(BevConfig);
-	
+	}
+
+	ReserveBuffers(FMath::Min(Config.GetTotalPoints(), MaxTracesPerScan));
+
 	StopScanTimer();
-	
+
 	if (bSensorEnabled)
+	{
 		StartScanTimer();
+	}
 }
 
 UTexture2D* ULidarSensorComponent::GetBevRenderTarget() const
@@ -283,23 +396,43 @@ void ULidarSensorComponent::ApplyPreset(ELidarSensorPreset NewPreset)
 	{
 	case ELidarSensorPreset::VelodyneVLP16:
 		Config = { 16, 1800, 10.0f, 10000.0f, 50.0f, 15.0f, -15.0f, 360.0f, 2.0f };
+		Config.ElevationAngles = {
+			-15.0f, 1.0f, -13.0f, 3.0f,
+			-11.0f, 5.0f, -9.0f, 7.0f,
+			-7.0f, 9.0f, -5.0f, 11.0f,
+			-3.0f, 13.0f, -1.0f, 15.0f
+		};
 		break;
 
 	case ELidarSensorPreset::VelodyneVLP32:
 		Config = { 32, 60, 10.0f, 20000.0f, 50.0f, 15.0f, -25.0f, 360.0f, 2.0f };
+		ApplyDefaultElevationAngles();
 		break;
 
 	case ELidarSensorPreset::OusterOS1_64:
 		Config = { 64, 45, 10.0f, 12000.0f, 50.0f, 22.5f, -22.5f, 360.0f, 1.5f };
+		ApplyDefaultElevationAngles();
 		break;
 
 	case ELidarSensorPreset::Livox_Mid360:
 		Config = { 8, 45, 10.0f, 7000.0f, 100.0f, 52.0f, -7.0f, 360.0f, 3.0f };
+		ApplyDefaultElevationAngles();
 		break;
 
 	case ELidarSensorPreset::Custom:
 	default:
+		if (Config.ElevationAngles.Num() != Config.NumChannels)
+		{
+			ApplyDefaultElevationAngles();
+		}
 		break;
+	}
+
+	BevConfig.ViewRange = Config.MaxRange;
+
+	if (BevRenderer)
+	{
+		BevRenderer->UpdateConfig(BevConfig);
 	}
 }
 
@@ -320,17 +453,24 @@ void ULidarSensorComponent::SavePointCloudData()
 	const FTransform InvSensor = PendingTransform.Inverse();
 	const int32 NumPoints = LastPointCloud.PointCount;
 
-	struct FKittiPoint { float X, Y, Z, Intensity; };
+	struct FKittiPoint
+	{
+		float X;
+		float Y;
+		float Z;
+		float Intensity;
+	};
+
 	TArray<FKittiPoint> Buffer;
 	Buffer.SetNumUninitialized(NumPoints);
 
 	for (int32 i = 0; i < NumPoints; ++i)
 	{
 		const FVector Local = InvSensor.TransformPosition(LastPointCloud.Points[i]);
-		Buffer[i].X         =  static_cast<float>(Local.X * 0.01);
-		Buffer[i].Y         = -static_cast<float>(Local.Y * 0.01);
-		Buffer[i].Z         =  static_cast<float>(Local.Z * 0.01);
-		Buffer[i].Intensity = LastPointCloud.Intensities[i];
+		Buffer[i].X = static_cast<float>(Local.X * 0.01);
+		Buffer[i].Y = -static_cast<float>(Local.Y * 0.01);
+		Buffer[i].Z = static_cast<float>(Local.Z * 0.01);
+		Buffer[i].Intensity = LastPointCloud.Intensities.IsValidIndex(i) ? LastPointCloud.Intensities[i] : 0.0f;
 	}
 
 	File->Write(
@@ -339,4 +479,51 @@ void ULidarSensorComponent::SavePointCloudData()
 	);
 
 	UE_LOG(LogLidarSensor, Verbose, TEXT("Saved %d points → %s"), NumPoints, *FilePath);
+}
+
+void ULidarSensorComponent::SetRangeNoiseStdDev(float InNoiseStdDev)
+{
+	Config.NoiseStdDev = FMath::Clamp(InNoiseStdDev, 0.0f, 50.0f);
+}
+
+void ULidarSensorComponent::SetObstacleDistanceThreshold(float InThresholdCm)
+{
+	ObstacleDistanceThreshold = FMath::Max(InThresholdCm, 0.0f);
+}
+
+int32 ULidarSensorComponent::GetObstaclePointCount() const
+{
+	int32 Count = 0;
+
+	for (int32 Flag : LastPointCloud.ObstacleFlags)
+	{
+		if (Flag != 0)
+		{
+			++Count;
+		}
+	}
+
+	return Count;
+}
+
+float ULidarSensorComponent::GetClosestObstacleDistanceCm() const
+{
+	const FVector SensorLocation = GetComponentLocation();
+
+	float ClosestDistance = TNumericLimits<float>::Max();
+
+	for (int32 i = 0; i < LastPointCloud.Points.Num(); ++i)
+	{
+		if (!LastPointCloud.ObstacleFlags.IsValidIndex(i) || LastPointCloud.ObstacleFlags[i] == 0)
+		{
+			continue;
+		}
+
+		const float Distance = FVector::Dist(SensorLocation, LastPointCloud.Points[i]);
+		ClosestDistance = FMath::Min(ClosestDistance, Distance);
+	}
+
+	return ClosestDistance == TNumericLimits<float>::Max()
+		? -1.0f
+		: ClosestDistance;
 }

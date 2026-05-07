@@ -23,7 +23,9 @@ public:
 private:
 	void CreateTexture();
 	void BuildColorLUT();
+	void DrawPoint(int32 CenterX, int32 CenterY, const FColor& Color, int32 PointSize);
 
+private:
 	UPROPERTY()
 	TObjectPtr<UTexture2D> DynamicTexture;
 
