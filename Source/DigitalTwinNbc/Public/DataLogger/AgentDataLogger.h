@@ -13,6 +13,10 @@ class DIGITALTWINNBC_API UAgentDataLogger : public UActorComponent
 
 public:
 	UAgentDataLogger();
+	
+	// 레이어 4 (SplineFollower) 에서 조향값 주입
+	UFUNCTION(BlueprintCallable, Category="Data Logger")
+	void SetSteeringInput(float InSteering) { CurrentSteeringInput = InSteering; }
 
 protected:
 	virtual void BeginPlay() override;
@@ -26,6 +30,9 @@ private:
 	void CreateCsvFile();
 	void AppendRow();
 
+	// 속도 → 색상 변환
+	FLinearColor SpeedToColor(float SpeedCmS) const;
+	
 	UFUNCTION(BlueprintCallable, Category="Data Logger")
 	void StartRecording();
 
@@ -54,12 +61,50 @@ private:
 	double OriginLongitude = 127.0000;
 
 private:
+	// 시각화 설정
+	// 궤적 선 두께 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Data Logger|Visualization",
+		meta=(AllowPrivateAccess="true"))
+	float TrailThickness = 3.f;
+ 
+	// 급감속 판정 임계값(cm/s)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Data Logger|Visualization",
+		meta=(AllowPrivateAccess="true"))
+	float HardBrakeThreshold = 500.f;
+ 
+	// 급감속 마커 크기(cm) 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Data Logger|Visualization",
+		meta=(AllowPrivateAccess="true"))
+	float BrakeMarkerSize = 40.f;
+ 
+	// DrawDebugString 라벨 최소 이동 간격(cm)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Data Logger|Visualization",
+		meta=(AllowPrivateAccess="true"))
+	float LabelInterval = 3000.f;
+ 
+	// 속도 색상 최솟값(cm/s) → 파랑 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Data Logger|Visualization",
+		meta=(AllowPrivateAccess="true"))
+	float SpeedColorMin = 0.f;
+ 
+	// 속도 색상 최댓값(cm/s) → 빨강
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Data Logger|Visualization",
+		meta=(AllowPrivateAccess="true"))
+	float SpeedColorMax = 2000.f;
+	
+private:
 	double OriginUtmEasting = 0.0;
 	double OriginUtmNorthing = 0.0;
 	int32 OriginUtmZone = 0;
-
 	FString CsvFilePath;
 	bool bIsRecording = false;
 	float TimeSinceLastSave = 0.0f;
 	float ElapsedRecordingTime = 0.0f;
+	
+	// 시각화용 상태 변수
+	FVector PrevLocation = FVector::ZeroVector;
+	float PrevSpeedCmS = 0.f;
+	bool bHasFirstSample = false;
+	FVector LastLabelLocation = FVector::ZeroVector;
+	float CurrentSteeringInput = 0.f;
 };
