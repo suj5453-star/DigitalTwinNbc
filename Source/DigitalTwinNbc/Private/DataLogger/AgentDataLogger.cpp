@@ -97,7 +97,7 @@ void UAgentDataLogger::CreateCsvFile()
 	CsvFilePath = FPaths::Combine(OutputDir, FileName);
 
 	FString Header =
-		TEXT("Timestamp,World_X,World_Y,World_Z,UTM_Easting,UTM_Northing,UTM_Zone,Velocity_kmh,Yaw,Accel_ms2,SteeringInput");
+		TEXT("Timestamp,World_X,World_Y,World_Z,UTM_Easting,UTM_Northing,UTM_Zone,Velocity_kmh,Yaw,Accel_ms2,SteeringInput,ThrottleInput");
   	// SensorExperimentComponent가 있으면 센서 실험 관련 컬럼을 뒤에 붙임
 	if (SensorExperimentComponent)
 	{
@@ -134,14 +134,15 @@ void UAgentDataLogger::AppendRow()
 	WorldToUtm(WorldLoc, UtmEasting, UtmNorthing);
 
 	FString Row = FString::Printf(
-		TEXT("%.3f,%.2f,%.2f,%.2f,%.4f,%.4f,%d,%.2f,%.4f,%.4f,%.4f"),
+		TEXT("%.3f,%.2f,%.2f,%.2f,%.4f,%.4f,%d,%.2f,%.4f,%.4f,%.4f,%.4f"),
 		ElapsedRecordingTime,
 		WorldLoc.X, WorldLoc.Y, WorldLoc.Z,
 		UtmEasting, UtmNorthing, OriginUtmZone,
 		SpeedKmh,
 		Yaw,
 		AccelMs2,
-		CurrentSteeringInput
+		CurrentSteeringInput,
+		CurrentThrottleInput
 	);
 	
 	// 센서 현재 실험 프리셋/센서 평가값만 CSV 컬럼 문자열로 제공

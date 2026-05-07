@@ -321,7 +321,8 @@ void ULidarSensorComponent::CollectAsyncResults()
 	{
 		BevRenderer->RenderPointCloud(LastPointCloud, PendingTransform);
 	}
-
+	OnLidarScanReady.Broadcast(LastPointCloud.Points);
+	
 	if (bIsDataSaving && LastPointCloud.PointCount > 0)
 	{
 		SavePointCloudData();

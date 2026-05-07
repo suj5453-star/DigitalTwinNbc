@@ -19,7 +19,8 @@ public:
 	// 레이어 4 (SplineFollower) 에서 조향값 주입
 	UFUNCTION(BlueprintCallable, Category="Data Logger")
 	void SetSteeringInput(float InSteering) { CurrentSteeringInput = InSteering; }
-
+	void SetThrottleInput(float InThrottle) { CurrentThrottleInput = InThrottle; }
+	
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(EEndPlayReason::Type EndPlayReason) override;
@@ -111,4 +112,5 @@ private:
 	bool bHasFirstSample = false;
 	FVector LastLabelLocation = FVector::ZeroVector;
 	float CurrentSteeringInput = 0.f;
+	float CurrentThrottleInput = 0.f;
 };

@@ -7,6 +7,8 @@
 #include "CameraSensorTypes.h"
 #include "LidarSensorComponent.generated.h"
 
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnLidarScanReady, const TArray<FVector>&, Points);
+
 class ULidarBevRenderer;
 class UTexture2D;
 
@@ -14,6 +16,9 @@ UCLASS(ClassGroup = (Sensor), meta = (BlueprintSpawnableComponent), BlueprintTyp
 class DIGITALTWINNBC_API ULidarSensorComponent : public USceneComponent
 {
 	GENERATED_BODY()
+public:
+	UPROPERTY(BlueprintAssignable, Category = "LidarSensor|Events")
+	FOnLidarScanReady OnLidarScanReady;
 
 public:
 	ULidarSensorComponent();
