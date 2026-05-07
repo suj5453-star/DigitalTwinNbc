@@ -5,6 +5,8 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Sensor/SensorExperimentComponent.h"
+#include "DrawDebugHelpers.h"
+#include "Kismet/GameplayStatics.h"
 
 UAgentDataLogger::UAgentDataLogger()
 {
@@ -26,6 +28,9 @@ void UAgentDataLogger::BeginPlay()
 	OriginUtmZone = GetUtmZone(OriginLongitude);
 	LatLonToUtm(OriginLatitude, OriginLongitude, OriginUtmZone, OriginUtmEasting, OriginUtmNorthing);
 
+	if (GetOwner())
+		LastLabelLocation = GetOwner()->GetActorLocation();
+	
 	if (bEnableLogging)
 	{
 		StartRecording();
@@ -92,9 +97,8 @@ void UAgentDataLogger::CreateCsvFile()
 	CsvFilePath = FPaths::Combine(OutputDir, FileName);
 
 	FString Header =
-		TEXT("Timestamp,World_X,World_Y,World_Z,UTM_Easting,UTM_Northing,UTM_Zone,Velocity_kmh,Yaw"
-	);
-	// SensorExperimentComponent가 있으면 센서 실험 관련 컬럼을 뒤에 붙임
+		TEXT("Timestamp,World_X,World_Y,World_Z,UTM_Easting,UTM_Northing,UTM_Zone,Velocity_kmh,Yaw,Accel_ms2,SteeringInput\n");
+  	// SensorExperimentComponent가 있으면 센서 실험 관련 컬럼을 뒤에 붙임
 	if (SensorExperimentComponent)
 	{
 		Header += SensorExperimentComponent->BuildCsvHeaderColumns();
@@ -116,21 +120,28 @@ void UAgentDataLogger::AppendRow()
 	const FVector WorldLoc = Owner->GetActorLocation();        // cm
 	const FRotator WorldRot = Owner->GetActorRotation();
 	const FVector Velocity = Owner->GetVelocity();             // cm/s
-
+	const float    SpeedCmS  = Velocity.Size();
 	const double SpeedKmh = Velocity.Size() * 0.01 * 3.6;
 	const double Yaw = WorldRot.Yaw;
 
+	const float SaveInterval = 1.0f / FMath::Max(SaveFrequencyHz, 0.1f);
+	float AccelMs2 = 0.f;
+	if (bHasFirstSample)
+		AccelMs2 = ((SpeedCmS - PrevSpeedCmS) / SaveInterval) * 0.01f;
+	
 	double UtmEasting = 0.0;
 	double UtmNorthing = 0.0;
 	WorldToUtm(WorldLoc, UtmEasting, UtmNorthing);
 
 	FString Row = FString::Printf(
-		TEXT("%.3f,%.2f,%.2f,%.2f,%.4f,%.4f,%d,%.2f,%.4f"),
+		TEXT("%.3f,%.2f,%.2f,%.2f,%.4f,%.4f,%d,%.2f,%.4f,%.4f,%.4f"),
 		ElapsedRecordingTime,
 		WorldLoc.X, WorldLoc.Y, WorldLoc.Z,
 		UtmEasting, UtmNorthing, OriginUtmZone,
 		SpeedKmh,
-		Yaw
+		Yaw,
+		AccelMs2,
+		CurrentSteeringInput
 	);
 	
 	// 센서 현재 실험 프리셋/센서 평가값만 CSV 컬럼 문자열로 제공
@@ -145,10 +156,49 @@ void UAgentDataLogger::AppendRow()
 		&IFileManager::Get(),
 		EFileWrite::FILEWRITE_Append
 	);
+	
+	if (bHasFirstSample)
+	{
+		// DrawDebugLine: 속도 기반 색상 궤적
+		DrawDebugLine(GetWorld(), PrevLocation, WorldLoc,
+			SpeedToColor(SpeedCmS).ToFColor(true),
+			true, -1.f, 0, TrailThickness);
+ 
+		// DrawDebugPoint: 급감속 마커
+		if ((PrevSpeedCmS - SpeedCmS) > HardBrakeThreshold)
+		{
+			DrawDebugPoint(GetWorld(),
+				WorldLoc + FVector(0, 0, 50.f),
+				BrakeMarkerSize, FColor::Orange, true, -1.f);
+		}
+	}
+	
+	// DrawDebugString: 일정 거리마다 속도/Yaw 수치 표시
+	if (FVector::Dist(WorldLoc, LastLabelLocation) >= LabelInterval)
+	{
+		DrawDebugString(GetWorld(),
+			WorldLoc + FVector(0, 0, 100.f),
+			FString::Printf(TEXT("%.1f km/h\nYaw: %.1f deg"), SpeedKmh, Yaw),
+			nullptr, FColor::White, -1.f, true);
+		LastLabelLocation = WorldLoc;
+	}
+ 
+	// 상태 갱신
+	PrevLocation    = WorldLoc;
+	PrevSpeedCmS    = SpeedCmS;
+	bHasFirstSample = true;
+}
+
+FLinearColor UAgentDataLogger::SpeedToColor(float SpeedCmS) const
+{
+	const float Alpha = FMath::Clamp(
+		(SpeedCmS - SpeedColorMin) / FMath::Max(SpeedColorMax - SpeedColorMin, 1.f),
+		0.f, 1.f);
+	return FLinearColor::LerpUsingHSV(FLinearColor::Blue, FLinearColor::Red, Alpha);
 }
 
 void UAgentDataLogger::WorldToUtm(const FVector& WorldLocation,
-	double& OutEasting, double& OutNorthing) const
+                                  double& OutEasting, double& OutNorthing) const
 {
 	const double OffsetEastM  =  WorldLocation.X * 0.01;
 	const double OffsetNorthM = -WorldLocation.Y * 0.01;
