@@ -132,12 +132,14 @@ void ADigitalTwinNbcPawn::ToggleLidarView(const FInputActionValue& Value)
 void ADigitalTwinNbcPawn::DoSteering(float SteeringValue)
 {
 	ChaosVehicleMovement->SetSteeringInput(SteeringValue);
+	if (DataLogger) DataLogger->SetSteeringInput(SteeringValue);
 }
 
 void ADigitalTwinNbcPawn::DoThrottle(float ThrottleValue)
 {
 	ChaosVehicleMovement->SetThrottleInput(ThrottleValue);
 	ChaosVehicleMovement->SetBrakeInput(0.0f);
+	if (DataLogger) DataLogger->SetThrottleInput(ThrottleValue);
 }
 
 void ADigitalTwinNbcPawn::DoBrake(float BrakeValue)
